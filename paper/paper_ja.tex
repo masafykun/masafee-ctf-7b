@@ -24,6 +24,12 @@
 \setlength{\columnsep}{0.6cm}
 \setlist{nosep,leftmargin=*}
 
+% Tighten the inter-character spacing between Japanese and Latin chars
+% (avoids "4-bit 事 前 量 子 化 版" gappy rendering)
+% LuaTeX-ja uses ltjsetparameter, not \setlength
+\ltjsetparameter{xkanjiskip={0.1\zw plus 0.05\zw minus 0.05\zw}}
+\ltjsetparameter{kanjiskip={0pt plus 0.05\zw minus 0.05\zw}}
+
 \definecolor{codebg}{rgb}{0.97,0.97,0.97}
 \lstset{
   basicstyle=\ttfamily\footnotesize,
@@ -51,7 +57,7 @@ CTF writeup による 7B コードモデルの QLoRA 継続事前学習 ---\\
 \maketitle
 
 \begin{abstract}
-\noindent 本論文は，CTFtime.org からスクレイプされた 18{,}013 件の Capture-the-Flag (CTF) writeup チャンクで，7B パラメータのコードモデル (Qwen 2.5 Coder 7B Instruct) を QLoRA 継続事前学習した結果を報告する．学習は単一の消費者向け GPU (NVIDIA GeForce RTX 3060 12\,GB) 上で 12 時間 17 分で完了し，電気代は約 150 円，クラウド計算コストは 0 円であった．得られたモデル \textbf{masafee-ctf-7b} を，ベースモデルおよび Cisco の Foundation-Sec-8B-Instruct と共に，2 種のベンチマーク (CyberMetric-500: サイバーセキュリティ知識多肢選択；NYU CTF Bench の 30 問サブセット: single-shot 非エージェント方式) で評価した．CyberMetric-500 では 3 モデルとも統計的ノイズの範囲内で同等の性能 (84.0\%, 86.2\%, 82.6\%) を示した．CTF サブセットでは 3 モデルとも低い正答率 (0\%, 13.3\%, 6.7\%) となり，writeup 学習モデルは writeup 形式の出力にコミットしてトークン上限内に最終 flag に到達しないという失敗モードが顕在化した．スタイル分析では，masafee-ctf-7b は Foundation-Sec-8B に対して hedging 表現を約 11 倍少なく産出することが判明した．これは学習データ領域 (CTF writeup vs SOC analysis テキスト) を反映したものであり，品質差ではない (hedging は SOC コンテキストでは機能的に適切である)．生 writeup での継続事前学習は capability transfer ではなく style transfer として機能し，本モデル規模では style overfitting がタスク関連出力を能動的に妨げ得る，と結論する．
+\noindent 本論文は，CTFtime.org からスクレイプされた 18{,}013 件の Capture-the-Flag (CTF) writeup チャンクで，7B パラメータのコードモデル (Qwen 2.5 Coder 7B Instruct) を QLoRA 継続事前学習した結果を報告する．学習は単一の消費者向け GPU (NVIDIA GeForce RTX 3060 12\,GB) 上で 12 時間 17 分で完了し，電気代は約 150 円，クラウド計算コストは 0 円であった．得られたモデル \textbf{masafee-ctf-7b} を，ベースモデルおよび Cisco の Foundation-Sec-8B-Instruct と共に，2 種のベンチマーク (CyberMetric-500: サイバーセキュリティ知識多肢選択；NYU CTF Bench の 30 問サブセット: single-shot 非エージェント方式) で評価した．CyberMetric-500 では 3 モデルとも統計的ノイズの範囲内で同等の性能 (84.0\%, 86.2\%, 82.6\%) を示した．CTF サブセットでは 3 モデルとも低い正答率 (0\%, 13.3\%, 6.7\%) となり，writeup 学習モデルは writeup 形式の出力にコミットしてトークン上限内に最終 flag に到達しないという失敗モードが顕在化した．スタイル分析では，masafee-ctf-7b は Foundation-Sec-8B に対して曖昧表現 (hedging) を約 11 倍少なく産出することが判明した．これは学習データ領域 (CTF writeup vs SOC analysis テキスト) を反映したものであり，品質差ではない (hedging は SOC コンテキストでは機能的に適切である)．\textbf{本論文の実験設定の範囲では}，生 writeup での継続事前学習は能力転移 (capability transfer) ではなく文体転移 (style transfer) として機能し，文体過適合 (style overfitting) がタスク関連出力を能動的に妨げ得ることが示された．データ量・モデル規模・プロンプト形式・instruction tuning の有無等が変われば異なる結果となる可能性がある．
 \vspace{0.5em}\\
 \noindent\textbf{キーワード:} QLoRA, 継続事前学習, Capture-the-Flag, Qwen, 消費者向け GPU, スタイル転移．
 \vspace{1em}
@@ -67,13 +73,13 @@ CTF writeup による 7B コードモデルの QLoRA 継続事前学習 ---\\
 
 本論文は，この期待を小規模で検証する実証実験を報告する．我々は 7B コードモデル (Qwen 2.5 Coder 7B Instruct \cite{hui2024qwen25coder}) に対し，18{,}013 件の CTF writeup チャンクで QLoRA \cite{dettmers2023qlora} 継続事前学習を行った．CTF writeup は特に明確なケースである: 認識しやすい表面スタイルパターン (番号付きの解法手順，\texttt{pwntools}, \texttt{checksec}, \texttt{gdb} 等の特定ツール参照，NX, PIE, RELRO, ASLR 等の典型的 CTF 防護機構の専門用語) を持ち，同時にタスク関連の内容 (exploit 推論，暗号解析アプローチ) も符号化している．
 
-本研究で観察された事項は以下の通り:
+本研究の実験設定の範囲で観察された事項は以下の通り:
 
 \begin{itemize}
-\item \textbf{Style transfer は発生する}: 学習済みモデルは CTF writeup の形式・用語・直接的な表現を獲得する．
-\item \textbf{Capability transfer は本規模では発生しない}: 知識多肢選択テストおよび実 CTF 問題上で，学習モデルはベースモデルと統計的に区別不能か，あるいは弱い．
-\item \textbf{Style overfitting はタスク性能を能動的に低下させ得る}: 学習モデルは writeup 形式のナラティブ出力にコミットし，応答トークン上限を最終回答が出る前に消費する．
-\item \textbf{SOC 特化リファレンスとのスタイル乖離は大きく定量的に測定可能}: Cisco の Foundation-Sec-8B-Instruct \cite{cisco2025foundationsec} と比較して，本モデルは hedging 表現を約 11 倍少なく使用する．これは学習データ領域 (CTF writeup vs SOC analysis テキスト) を反映したものであり品質差ではない．hedging 表現は SOC コンテキストでは機能的に適切である．
+\item \textbf{文体転移 (style transfer) は発生する}: 学習済みモデルは CTF writeup の形式・用語・直接的な表現を獲得する．
+\item \textbf{能力転移 (capability transfer) は本設定では観測されない}: 本研究で用いた知識多肢選択テストおよび実 CTF 問題上で，学習モデルはベースモデルと統計的に区別不能か，あるいは弱い．
+\item \textbf{文体過適合 (style overfitting) はタスク性能を能動的に低下させ得る}: 学習モデルは writeup 形式のナラティブ出力にコミットし，応答トークン上限を最終回答が出る前に消費する．
+\item \textbf{SOC 特化リファレンスとの文体乖離は大きく定量的に測定可能}: Cisco の \texttt{Foundation-Sec-8B-Instruct} \cite{cisco2025foundationsec} と比較して，本モデルは曖昧表現 (hedging) を約 11 倍少なく使用する．これは学習データ領域 (CTF writeup vs SOC analysis テキスト) を反映したものであり品質差ではない．hedging は SOC コンテキストでは機能的に適切である．
 \end{itemize}
 
 本研究の貢献は: (i) 単一 12\,GB 消費者向け GPU 上で CTF テキストに対し 7B モデルを QLoRA 継続事前学習する完全に再現可能なレシピ；(ii) 得られたモデルと強力なベースモデル，および公開された SOC 特化リファレンスとの一対一評価；(iii) 小規模継続事前学習が産む style-vs-capability tradeoff の定量的特性化；(iv) 全学習スクリプト・評価ハーネス・LoRA アダプタ・Q4{\_}K{\_}M GGUF 配布物のオープンリリース．
@@ -265,11 +271,11 @@ Hedging 表現 (30 件合計) & 7 & 77 \\
 \section{考察}
 %--------------------------------------------------
 
-\subsection{Style transfer vs Capability transfer}
+\subsection{文体転移 vs 能力転移}
 
-最大の知見は，生 CTF writeup 上の継続事前学習が，我々が試した 7B 規模では style transfer 操作として作用するということである．モデルは認識可能な writeup 形式と CTF 固有用語を獲得する．知識 MCQ 上でも single-shot CTF 問題上でもベースを超える測定可能な capability を獲得しない；後者のタスクでは獲得したスタイルプライアが能動的に有害である．
+最大の知見は，生 CTF writeup 上の継続事前学習が，本研究で試した 7B 規模・約 1{,}000 万トークン規模では文体転移 (style transfer) 操作として作用するということである．モデルは認識可能な writeup 形式と CTF 固有用語を獲得する．本研究で用いた知識 MCQ 上でも single-shot CTF 問題上でもベースを超える測定可能な能力 (capability) を獲得しない；後者のタスクでは獲得したスタイル prior が能動的に有害である．
 
-寄与要因として 2 つを提案する．第一に，18{,}013 件 writeup チャンク (10.6\,M トークン) は Qwen 2.5 Coder の事前学習コーパスに比べ小さく，ベースの推論能力を超える押し上げは起きにくい．第二に，writeup は事後ナラティブで，表面形式が極めて特徴的だが内部論理は不均一 (問題ごと・ツールごとに異なる)；次トークン確率を最大化するよう学習されるモデルは，最も予測しやすい表面パターンに容量を合理的に割り当てる．
+寄与要因として 2 つを提案する．第一に，18{,}013 件 writeup チャンク (10.6\,M トークン) は Qwen 2.5 Coder の事前学習コーパスに比べ小さく，ベースの推論能力を超える押し上げは起きにくい．第二に，writeup は事後ナラティブで，表面形式が極めて特徴的だが内部論理は不均一 (問題ごと・ツールごとに異なる)；次トークン確率を最大化するよう学習されるモデルは，最も予測しやすい表面パターンに容量を合理的に割り当てる．これらの解釈はあくまで本設定での観察に基づくものであり，より大規模なコーパス・instruction-format 化されたデータ・より大きなモデルでは異なる挙動が観測される可能性を留意する．
 
 \subsection{Foundation-Sec-8B とのドメインプライア不一致}
 
@@ -281,7 +287,7 @@ Hedging 表現 (30 件合計) & 7 & 77 \\
 
 \begin{itemize}
 \item Style transfer (例: コーパスの声に合わせた書き手アシスタント) が目的なら，生テキスト約 1{,}000 万トークンの継続事前学習で十分．
-\item 直接回答タスクの capability transfer が目的なら，事後ナラティブテキスト上の生継続事前学習は，同コーパス由来のキュレートされた $\langle\text{プロンプト}, \text{回答}\rangle$ ペア上の instruction tuning に劣る可能性が高い．
+\item 直接回答タスクの能力転移 (capability transfer) が目的なら，事後ナラティブテキスト上の生継続事前学習は，同コーパス由来のキュレートされた〈プロンプト，回答〉ペア上の instruction tuning に劣る可能性が高い．
 \item Style overfitting は出力予算枯渇として表面化し得る．応答トークン予算を増やしても部分的にしか緩和されない；根本問題はモデルのプライアが直接回答抽出よりナラティブ構造を好むことである．
 \end{itemize}
 
@@ -301,7 +307,9 @@ Hedging 表現 (30 件合計) & 7 & 77 \\
 \section{結論}
 %--------------------------------------------------
 
-我々は \textbf{masafee-ctf-7b} を作成し公開した．これは Qwen 2.5 Coder 7B Instruct を CTF writeup テキストで QLoRA 継続事前学習した 7B パラメータ微調整モデルで，単一消費者向け GPU 上で 12 時間 17 分・電気代約 150 円で学習された．実証的に，微調整は測定可能な style transfer (CTF writeup 形式・用語・直接性) を生むが，知識 MCQ ベンチマーク上でも single-shot CTF チャレンジ攻略上でも測定可能な capability transfer を生まない；実際後者のタスクでは獲得したスタイルプライアが能動的に有害である．得られたモデルが Cisco の Foundation-Sec-8B-Instruct と同一 CTF プロンプトで約 11 倍少ない hedging 表現を産出することも報告した．これは品質順序ではなく学習データ領域を反映している．
+我々は \textbf{masafee-ctf-7b} を作成し公開した．これは Qwen 2.5 Coder 7B Instruct を CTF writeup テキストで QLoRA 継続事前学習した 7B パラメータ微調整モデルで，単一消費者向け GPU 上で 12 時間 17 分・電気代約 150 円で学習された．\textbf{本実験設定の範囲で}，微調整は測定可能な文体転移 (style transfer，CTF writeup 形式・用語・直接性) を生んだが，本研究で用いた知識 MCQ ベンチマーク上でも single-shot CTF チャレンジ攻略上でも測定可能な能力転移 (capability transfer) は観測できなかった；実際後者のタスクでは獲得したスタイル prior が能動的に有害であった．得られたモデルが Cisco の \texttt{Foundation-Sec-8B-Instruct} と同一 CTF プロンプトで約 11 倍少ない曖昧表現 (hedging) を産出することも報告した．これは品質順序ではなく学習データ領域を反映している．
+
+本研究の結論はあくまで「7B \texttt{Qwen 2.5 Coder} ベース・18k 件規模 writeup の生テキスト継続事前学習・single-shot 評価」という設定の下での知見であり，より大きなデータ量・instruction tuning 形式・より大きなモデル・異なる評価形式 (agent harness 等) では異なる結果が得られる可能性があることを強調する．
 
 全コード・スクリプト・LoRA アダプタ・Q4{\_}K{\_}M GGUF・評価結果は公開済みである．小規模消費者向け GPU での style-vs-capability transfer の具体的記述が，ドメイン適応のため継続事前学習を検討する他の実務者にとって有用であることを期待する．
 
