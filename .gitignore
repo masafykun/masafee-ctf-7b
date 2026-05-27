@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code (AI agent local context — never publish)
+CLAUDE.md
+BUILD_LOG.md
+.claude/
+
+# Models / datasets / checkpoints (large binaries, kept off git)
+models/
+datasets/
+checkpoints/
+output/
+*.safetensors
+*.gguf
+*.bin
+
+# Logs
+*.log
+wandb/

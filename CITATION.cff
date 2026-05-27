@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+title: "Masafee CTF 7B: QLoRA Fine-Tuning of a 7B Code Model on CTF Writeups for Stylistic and Knowledge Adaptation"
+message: "If you use this software or model, please cite it using this metadata."
+type: software
+version: v1.0.0
+date-released: "2026-05-27"
+authors:
+  - family-names: Suzuki
+    given-names: Masato
+    alias: masafykun
+    orcid: "https://orcid.org/0009-0000-7977-2756"
+    website: "https://masafy.org/"
+repository-code: "https://github.com/masafykun/masafee-ctf-7b"
+url: "https://huggingface.co/masafy/masafee-ctf-7b"
+license: MIT
+keywords:
+  - qlora
+  - fine-tuning
+  - cybersecurity
+  - capture-the-flag
+  - ctf
+  - llm
+  - qwen
+  - consumer-gpu
+  - unsloth
+  - continued-pretraining
+abstract: >
+  Empirical study of QLoRA continued pretraining of a 7B code model
+  (Qwen 2.5 Coder 7B Instruct) on 18,013 CTF (Capture-the-Flag) writeup
+  chunks scraped from CTFtime.org. The fine-tuned model
+  (masafee-ctf-7b) is evaluated on the CyberMetric-500 cybersecurity
+  knowledge benchmark and a 30-challenge subset of the NYU CTF Bench
+  alongside the base model and Cisco's Foundation-Sec-8B-Instruct.
+  Findings: (1) continued pretraining on writeup text produces
+  measurable style transfer (directness, CTF-specific terminology)
+  but no measurable capability gain on knowledge MCQs or single-shot
+  CTF problem solving; (2) style overfitting can actively impede
+  flag-answer extraction; (3) the writeup-trained model exhibits an
+  11x lower hedging-language rate than the SOC-tuned Foundation-Sec-8B,
+  reflecting domain-specific training-data priors rather than a
+  quality difference. All training was performed on a single
+  consumer GPU (RTX 3060 12GB) in 12 hours 17 minutes.

@@ -1,0 +1,23 @@
+{
+  "base-qwen-coder": {
+    "model": "qwen2.5-coder:7b",
+    "n": 30,
+    "correct": 4,
+    "acc": 13.333333333333334,
+    "elapsed_sec": 289.6438660621643
+  },
+  "masafee-ctf-7b": {
+    "model": "masafee-ctf-7b:latest",
+    "n": 30,
+    "correct": 0,
+    "acc": 0.0,
+    "elapsed_sec": 343.3181993961334
+  },
+  "foundation-sec-8b": {
+    "model": "foundation-sec-8b:latest",
+    "n": 30,
+    "correct": 2,
+    "acc": 6.666666666666667,
+    "elapsed_sec": 354.3322448730469
+  }
+}
