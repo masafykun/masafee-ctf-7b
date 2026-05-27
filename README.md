@@ -17,6 +17,8 @@
 
 📄 **論文 / Paper**: [paper_en.pdf](paper/paper_en.pdf) (English, 5 pages) · [paper_ja.pdf](paper/paper_ja.pdf) (日本語, 6 ページ)
 
+![QLoRA training loss curve](figures/loss_curve.png)
+
 ---
 
 ## 概要
@@ -47,6 +49,8 @@
 | `foundation-sec-8b` | 82.60% |
 
 3モデルとも 95% 信頼区間 (±3.1pp) 内で実質同等。CTF writeup 学習は MCQ 知識に有意な影響を与えなかった。
+
+![CyberMetric-500 accuracy comparison](figures/cybermetric_bar.png)
 
 ### NYU CTF Bench (実 CTF 問題、30 問サブセット、single-shot)
 
