@@ -8,7 +8,7 @@
 [![Method](https://img.shields.io/badge/Method-QLoRA-34d399?style=flat-square)](https://github.com/unslothai/unsloth)
 [![GPU](https://img.shields.io/badge/GPU-RTX%203060%2012GB-76b900?style=flat-square)](https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3060-3060ti/)
 [![Hugging Face](https://img.shields.io/badge/🤗%20Hugging%20Face-masafy%2Fmasafee--ctf--7b-FFD21E?style=flat-square)](https://huggingface.co/masafy/masafee-ctf-7b)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20413081.svg)](https://doi.org/10.5281/zenodo.20413081)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20413080.svg)](https://doi.org/10.5281/zenodo.20413080)
 [![ORCID](https://img.shields.io/badge/ORCID-0009--0000--7977--2756-A6CE39?style=flat-square&logo=orcid&logoColor=white)](https://orcid.org/0009-0000-7977-2756)
 
 [Stable Diffusion LoRA](https://github.com/masafykun/masafee-lora) で作った [masafee-lora](https://huggingface.co/masafy/masafee-lora) と同じ「**自宅 RTX 3060 で完結する個人研究シリーズ**」第二弾。今回はテキスト生成 LLM で、**CTF writeup の文体・専門用語** を 7B モデルに継続事前学習させた。
@@ -199,14 +199,15 @@ If you reference this work:
   title        = {{Masafee CTF 7B: QLoRA Fine-Tuning of a 7B Code Model on
                    CTF Writeups for Stylistic and Knowledge Adaptation}},
   year         = {2026},
-  version      = {v1.0.0},
-  doi          = {10.5281/zenodo.20413081},
-  url          = {https://doi.org/10.5281/zenodo.20413081},
+  version      = {v1.1.2},
+  doi          = {10.5281/zenodo.20413080},
+  url          = {https://doi.org/10.5281/zenodo.20413080},
   orcid        = {0009-0000-7977-2756}
 }
 ```
 
-**DOI (永続アーカイブ):** [10.5281/zenodo.20413081](https://doi.org/10.5281/zenodo.20413081)
+**Concept DOI (常に最新版を指す):** [10.5281/zenodo.20413080](https://doi.org/10.5281/zenodo.20413080)
+**Latest version DOI (v1.1.2):** [10.5281/zenodo.20414608](https://doi.org/10.5281/zenodo.20414608)
 
 GitHub 右上の "Cite this repository" からも生成できる（[CITATION.cff](CITATION.cff)）。
 

@@ -2,10 +2,16 @@ cff-version: 1.2.0
 title: "Masafee CTF 7B: QLoRA Fine-Tuning of a 7B Code Model on CTF Writeups for Stylistic and Knowledge Adaptation"
 message: "If you use this software or model, please cite it using this metadata."
 type: software
-version: v1.0.0
+version: v1.1.2
 date-released: "2026-05-27"
-doi: "10.5281/zenodo.20413081"
+doi: "10.5281/zenodo.20413080"
 identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20413080"
+    description: "Zenodo concept DOI (always resolves to the latest version)"
+  - type: doi
+    value: "10.5281/zenodo.20414608"
+    description: "Zenodo archive of release v1.1.2 (latest at time of writing)"
   - type: doi
     value: "10.5281/zenodo.20413081"
     description: "Zenodo archive of release v1.0.0"
