@@ -26,3 +26,10 @@ output/
 # Logs
 *.log
 wandb/
+
+# Qiita (other articles auto-pulled by qiita-cli publish — keep only this project's)
+article/node_modules/
+article/.remote/
+article/public/*
+!article/public/masafee-ctf-7b.md
+
