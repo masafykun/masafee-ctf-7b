@@ -15,6 +15,8 @@
 
 評価結果の詳細は [EVALUATION.md](EVALUATION.md) を参照。
 
+📄 **論文 / Paper**: [paper_en.pdf](paper/paper_en.pdf) (English, 5 pages) · [paper_ja.pdf](paper/paper_ja.pdf) (日本語, 6 ページ)
+
 ---
 
 ## 概要

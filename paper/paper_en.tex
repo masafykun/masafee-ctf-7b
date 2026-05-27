@@ -1,0 +1,376 @@
+\documentclass[10pt,twocolumn,a4paper]{article}
+
+\usepackage[a4paper,margin=2cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{titling}
+\usepackage{authblk}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage[symbol]{footmisc}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black
+}
+
+\setlength{\columnsep}{0.6cm}
+\setlist{nosep,leftmargin=*}
+
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  breaklines=true,
+  frame=none,
+  showstringspaces=false,
+  columns=fullflexible,
+}
+
+\title{\vspace{-1.5em}Masafee CTF 7B:\\
+QLoRA Fine-Tuning of a 7B Code Model on \\
+CTF Writeups for Stylistic and Knowledge Adaptation}
+
+\author{Masato Suzuki\thanks{ORCID: \href{https://orcid.org/0009-0000-7977-2756}{0009-0000-7977-2756} \quad Web: \url{https://masafy.org/}}}
+\affil{Independent Researcher}
+\date{May 2026}
+
+\renewcommand{\thefootnote}{\fnsymbol{footnote}}
+
+\begin{document}
+
+\twocolumn[
+\begin{@twocolumnfalse}
+\maketitle
+
+\begin{abstract}
+\noindent We report on the QLoRA continued pretraining of a 7B-parameter code model (Qwen 2.5 Coder 7B Instruct) on 18{,}013 Capture-the-Flag (CTF) writeup chunks scraped from CTFtime.org. Training was performed on a single consumer GPU (NVIDIA GeForce RTX 3060 12\,GB) in 12 hours 17 minutes, at an electricity cost of approximately 150\,JPY and zero cloud cost. We evaluate the resulting model, \textbf{masafee-ctf-7b}, alongside the base model and Cisco's Foundation-Sec-8B-Instruct on two benchmarks: CyberMetric-500 (multiple-choice cybersecurity knowledge) and a 30-challenge subset of the NYU CTF Bench evaluated under a single-shot, non-agentic protocol. On CyberMetric-500 all three models perform within statistical noise of one another (84.0\%, 86.2\%, 82.6\%). On the CTF subset all three perform poorly (0\%, 13.3\%, 6.7\%), revealing that the writeup-trained model commits to writeup-formatted outputs that exhaust the token budget before reaching a final flag string. A stylistic analysis shows that masafee-ctf-7b uses roughly 11$\times$ fewer hedging-language tokens than Foundation-Sec-8B; we attribute this to the training-data domain (CTF writeups vs. SOC analysis text) and emphasise that hedging is functionally appropriate in SOC contexts. We conclude that continued pretraining on raw writeup text functions as style transfer rather than capability transfer, and that style overfitting can actively impede task-relevant outputs at this model scale.
+\vspace{0.5em}\\
+\noindent\textbf{Keywords:} QLoRA, continued pretraining, Capture-the-Flag, Qwen, consumer GPU, style transfer.
+\vspace{1em}
+\end{abstract}
+\end{@twocolumnfalse}
+]
+
+%--------------------------------------------------
+\section{Introduction}
+%--------------------------------------------------
+
+Continued pretraining---further training a pretrained language model on a domain-specific corpus without changing the optimization objective---is a widely used technique for specialising large language models to narrow domains \cite{gururangan2020dont}. When the domain corpus contains both surface stylistic patterns (formatting, jargon) and deeper task-relevant knowledge (problem structure, reasoning), one would hope continued pretraining transfers both.
+
+This paper documents an empirical exercise that tests this hope at small scale. We perform QLoRA \cite{dettmers2023qlora} continued pretraining of a 7B code model (Qwen 2.5 Coder 7B Instruct \cite{hui2024qwen25coder}) on 18{,}013 Capture-the-Flag (CTF) writeup chunks. CTF writeups are a particularly clear case: they exhibit highly recognisable surface stylistic patterns (numbered solution steps, references to specific tools such as \texttt{pwntools}, \texttt{checksec}, \texttt{gdb}; characteristic CTF mitigation jargon like NX, PIE, RELRO, ASLR) and they also encode genuine task-relevant content (exploit reasoning, cryptanalytic approaches).
+
+We make the following observations:
+
+\begin{itemize}
+\item \textbf{Style transfer occurs}. The fine-tuned model adopts CTF writeup formatting, terminology, and directness of expression.
+\item \textbf{Capability transfer does not occur} at this scale. On knowledge multiple-choice tests and on practical CTF challenges the fine-tuned model is statistically indistinguishable from or weaker than the base model.
+\item \textbf{Style overfitting actively harms task performance} in some cases: the fine-tuned model commits to writeup-formatted narrative output that exhausts the response token budget before a final answer is produced.
+\item \textbf{Stylistic divergence from a SOC-tuned reference model is large and measurable}. Compared with Cisco's Foundation-Sec-8B-Instruct \cite{cisco2025foundationsec}, our model uses approximately 11$\times$ fewer hedging-language tokens. We interpret this as a reflection of training-data domain (CTF writeups vs. SOC analysis text) rather than a quality difference, and emphasise that hedging language is functionally appropriate in SOC contexts.
+\end{itemize}
+
+The contributions of this work are: (i) a complete reproducible recipe for QLoRA continued pretraining of a 7B model on CTF text using a single 12\,GB consumer GPU; (ii) a head-to-head evaluation of the resulting model against a strong base model and against a published SOC-tuned reference; (iii) a quantitative characterisation of the style-vs-capability tradeoff that small-scale continued pretraining produces; and (iv) the open release of all training scripts, evaluation harnesses, the LoRA adapter, and a Q4{\_}K{\_}M GGUF distribution.
+
+%--------------------------------------------------
+\section{Background and Related Work}
+%--------------------------------------------------
+
+\subsection{Continued Pretraining and Domain Adaptation}
+
+Domain-adaptive pretraining \cite{gururangan2020dont} extends a base language model on in-domain text before downstream use. Prior work has shown that this can improve domain task performance, though the effect depends on the quantity of in-domain data, the alignment between domain text and downstream task format, and the base model's existing exposure to the domain. Small-scale continued pretraining on stylistically distinctive corpora is known to induce visible style transfer (output adopts the corpus's surface forms) even when capability gains are minimal.
+
+\subsection{QLoRA}
+
+QLoRA \cite{dettmers2023qlora} combines 4-bit quantisation of the base model with LoRA \cite{hu2022lora} adapters on attention and MLP projection matrices. The base model is held in 4-bit form throughout training; only the LoRA adapter parameters (in higher precision) receive gradients. This reduces VRAM consumption sufficiently that 7B models can be fine-tuned on a single 12\,GB GPU. We use the \texttt{unsloth} \cite{unsloth2024} implementation, which provides additional memory and throughput optimisations.
+
+\subsection{Cybersecurity LLM Benchmarks}
+
+We use two evaluation benchmarks. \textbf{CyberMetric} \cite{tihanyi2024cybermetric} is a 10{,}000-question multiple-choice benchmark covering cybersecurity knowledge spanning NIST publications, RFCs, and public security texts. \textbf{NYU CTF Bench} \cite{shao2024nyuctf} provides 200 test-set CTF challenges with metadata, distributed files, and reference flags; its official protocol is agentic (multi-turn interaction in a sandbox). The published baseline on NYU CTF Bench reports that the strongest 32B open-weight model achieves a Pass@1 of approximately 31.9\% under the agentic protocol; smaller models perform substantially worse.
+
+\subsection{Foundation-Sec-8B-Instruct}
+
+Cisco's Foundation-Sec-8B \cite{cisco2025foundationsec} is an 8B parameter language model derived from Llama 3.1 8B, continued-pretrained on curated cybersecurity text (CVE records, threat intelligence reports, exploit write-ups, compliance guides) and instruction-tuned for security analyst workflows. It is presented as targeted at Security Operations Centre (SOC) workflows---threat intelligence summarisation, vulnerability classification, incident triage---rather than at offensive security competitions. We use it here as a reference for ``a strong, commercially developed, 8B cybersecurity LLM,'' while noting that its design target is different from ours.
+
+%--------------------------------------------------
+\section{Approach}
+%--------------------------------------------------
+
+\subsection{Base Model}
+
+We use Qwen 2.5 Coder 7B Instruct \cite{hui2024qwen25coder} as the base, accessed in its 4-bit pre-quantised form (\texttt{unsloth/Qwen2.5-Coder-7B-Instruct}). Qwen 2.5 Coder is selected over Qwen 2.5 (the general-purpose variant) on the prior that CTF tasks are code-dense (binary analysis, exploit code, cryptography, web payloads), and over Qwen 3 7B on the prior that no Coder variant of Qwen 3 was published at the time of this work.
+
+\subsection{Training Data}
+
+We use \texttt{justinwangx/CTFtime} \cite{justinwangx2024ctftime}, a publicly available Hugging Face dataset of 18{,}013 CTF writeup chunks scraped from CTFtime.org. The dataset has a single field \texttt{text\_chunk} containing raw writeup text. We apply the following preprocessing:
+
+\begin{enumerate}
+\item Length filter: $500 < |\text{chars}| < 8000$ to drop URL-only stubs and overly long concatenated writeups. This retains 11{,}612 of 18{,}013 chunks (64.5\%).
+\item Tokenization with the Qwen 2.5 Coder tokenizer. Total tokens: 10{,}639{,}182.
+\item Document concatenation with EOS separators, then chunking into fixed 2048-token sequences. We discard the final partial chunk, yielding 5{,}200 packed sequences (4{,}940 train / 260 validation, 95/5 split, seed 42).
+\end{enumerate}
+
+We deliberately do \emph{not} convert the data to instruction-format (User/Assistant) pairs. Our objective is to characterise the effect of \emph{raw} continued pretraining, not of instruction tuning.
+
+\subsection{Training Configuration}
+
+QLoRA configuration:
+
+\begin{itemize}
+\item LoRA rank $r = 32$, $\alpha = 64$, dropout 0.05.
+\item Target modules: $q$, $k$, $v$, $o$ attention projections; $gate$, $up$, $down$ MLP projections.
+\item Base loaded in 4-bit (NF4 via bitsandbytes); gradient checkpointing enabled.
+\end{itemize}
+
+Optimisation:
+\begin{itemize}
+\item Optimiser: paged AdamW 8-bit.
+\item Learning rate: $2\times 10^{-4}$, cosine schedule, 10 warmup steps.
+\item Effective batch size: 8 (per-device batch 1, gradient accumulation 8).
+\item Sequence length: 2048 (chosen over 4096 due to a documented VRAM constraint encountered with the longer length on RTX 3060 12\,GB).
+\item Epochs: 2 (1{,}236 optimisation steps).
+\item Random seed: 42.
+\end{itemize}
+
+\subsection{Distribution}
+
+After training we produce two distribution artifacts: (i) the LoRA adapter, for use with \texttt{peft}; (ii) a Q4{\_}K{\_}M GGUF derived by merging the adapter into the FP16 base model on CPU and converting via \texttt{llama.cpp}'s \texttt{convert\_hf\_to\_gguf.py} followed by \texttt{llama-quantize}. The resulting GGUF is 4.4\,GB and is intended for Ollama and \texttt{llama.cpp} consumers.
+
+%--------------------------------------------------
+\section{Evaluation Setup}
+%--------------------------------------------------
+
+We compare three models, all served through Ollama \texttt{/api/chat}:
+
+\begin{itemize}
+\item \texttt{qwen2.5-coder:7b} --- base, Q4{\_}K{\_}M, 4.7\,GB.
+\item \texttt{masafee-ctf-7b} --- our model, Q4{\_}K{\_}M, 4.4\,GB.
+\item \texttt{foundation-sec-8b} --- Cisco's, Q8{\_}0, 8.5\,GB.
+\end{itemize}
+
+The quantisation levels differ (Q4{\_}K{\_}M vs Q8{\_}0); we report inference-time and memory numbers as-published rather than as a like-for-like architectural comparison.
+
+\subsection{CyberMetric-500}
+
+We take the 500-question subset of CyberMetric \cite{tihanyi2024cybermetric}. Each item is a question with four labelled options A--D and a known correct letter. The prompt format is
+
+\begin{lstlisting}
+{question}
+
+A. {option A}
+B. {option B}
+C. {option C}
+D. {option D}
+
+Respond with only a single letter (A, B, C, or D).
+\end{lstlisting}
+
+Generation parameters: temperature 0, \texttt{num\_predict} 30. We parse the first occurrence of an isolated A/B/C/D in the response.
+
+\subsection{NYU CTF Bench Single-Shot Subset}
+
+From the 200-item test split of the NYU CTF Database \cite{shao2024nyuctf} we select 30 challenges stratified by category (crypto 6, rev 6, pwn 6, misc 4, web 4, forensics 4) via random sampling with seed 42. For each challenge we construct a prompt that contains: the challenge metadata (name, category, description), the README, and the distributed files (text included in full; binaries summarised by their length and the first 2\,500 bytes of hexdump). The reference \texttt{solver.py} is excluded. The prompt instructs the model to produce an analysis followed by \texttt{FLAG: <value>}.
+
+Generation parameters: temperature 0, \texttt{num\_ctx} 8192, \texttt{num\_predict} 800. We score a response correct if the reference flag string (or its inner \texttt{\{...\}} content) appears anywhere in the response (case-insensitive, whitespace-collapsed).
+
+This protocol is strictly weaker than the official NYU CTF Bench agentic protocol. We do not compare our absolute numbers to published NYU CTF Bench numbers; we use the subset only to compare the three models against each other under identical conditions.
+
+\subsection{Style Analysis}
+
+We additionally measure on the 30-challenge prompt set: (a) average output length in characters; (b) the number of distinct CTF tool/technique terms used, from a fixed list (\texttt{pwntools}, \texttt{checksec}, ROP, ret2win, ret2libc, \texttt{pattern\_create}, \texttt{gdb}, \texttt{Ghidra}, \texttt{IDA}, NX, PIE, RELRO, ASLR, canary, shellcode, buffer overflow, etc.); (c) the total count of hedging-language phrases, from a fixed list ``might be'', ``possibly'', ``could be'', ``perhaps'', ``may have'', ``appears to'', ``seems to'', ``unable to determine''.
+
+%--------------------------------------------------
+\section{Results}
+%--------------------------------------------------
+
+\subsection{CyberMetric-500}
+
+\begin{table}[h!]
+\centering
+\caption{CyberMetric-500 accuracy.}
+\label{tab:cybermetric}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Model & Correct & Total & Acc.\ \\
+\midrule
+\texttt{qwen2.5-coder:7b} & 431 & 500 & 86.20\% \\
+\texttt{masafee-ctf-7b} & 420 & 500 & 84.00\% \\
+\texttt{foundation-sec-8b} & 413 & 500 & 82.60\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All three models fall within the same 95\% confidence interval. The 95\% CI for a binomial proportion of approximately 0.85 with $n=500$ is $\pm 3.1$ percentage points. None of the pairwise differences reaches statistical significance at $\alpha = 0.05$. CTF writeup continued pretraining produces no measurable knowledge MCQ improvement and no measurable degradation.
+
+\subsection{NYU CTF Bench Single-Shot Subset}
+
+\begin{table}[h!]
+\centering
+\caption{NYU CTF subset, single-shot Pass@1.}
+\label{tab:nyu}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Model & Solved & Total & Pass@1 \\
+\midrule
+\texttt{qwen2.5-coder:7b} & 4 & 30 & 13.3\% \\
+\texttt{foundation-sec-8b} & 2 & 30 & 6.7\% \\
+\texttt{masafee-ctf-7b} & 0 & 30 & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All three perform poorly. We note that the 13.3\% achieved by the base model likely reflects a combination of (i) pretraining-data overlap with publicly available CSAW writeups, (ii) successful inference from challenge metadata, and (iii) tractability of the chosen subset, rather than functional CTF-solving capability at this scale.
+
+The 0\% achieved by masafee-ctf-7b is informative: manual inspection shows the model produces writeup-formatted prose (``\texttt{\# CSAW 2017 - grumpcheck (rev) \#\# Description ...}'') that exhausts the 800-token output budget before a concrete flag is emitted. In one case (\texttt{2017q-pwn-pilot}, an actual quadcopter-themed challenge) the model produced a coherent writeup for an unrelated menu-based ordering program, suggesting that writeup-format priors override prompt-specific content.
+
+\subsection{Stylistic Behaviour}
+
+\begin{table}[h!]
+\centering
+\caption{Stylistic measures across the 30-challenge prompt set.}
+\label{tab:style}
+\small
+\begin{tabular}{lrr}
+\toprule
+Measure & masafee & foundation-sec \\
+\midrule
+Average output length (chars) & 1{,}860 & 1{,}903 \\
+Distinct CTF terms used & 22 & 21 \\
+Hedging phrases (sum across 30) & 7 & 77 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The hedging-phrase ratio of approximately 11$\times$ is the largest behavioural divergence observed. We do not interpret this as a quality difference: hedging language (``might be'', ``appears to'', ``seems to'', ``unable to determine'') is functionally appropriate in Security Operations Centre and threat-intelligence contexts, where premature commitment to a specific attack hypothesis can mislead analysts. Foundation-Sec-8B's higher hedging frequency aligns with its stated design goals. CTF writeups, by contrast, are after-the-fact narratives that state what worked; this prior surfaces in masafee-ctf-7b's output as more direct, command-oriented phrasing.
+
+\subsection{Example: Crypto Challenge \texttt{2022q-cry-beyond\_quantum}}
+
+\paragraph{Foundation-Sec-8B (excerpt; 4 hedges in this segment):}
+``The challenge seems to be based on the NTRU cryptosystem... there are several potential vulnerabilities or oversights in the implementation that could lead to exploitation: (1) Key Generation: The key generation process might not be secure enough...; (2) Error Handling: There is a possibility of an error handling issue...''
+
+\paragraph{masafee-ctf-7b (excerpt; 0 hedges in this segment):}
+``The vulnerability here is that the polynomial $f$ can be recovered from $h$, $g$ and $p$. (1) We know $h = f \cdot g \bmod q$. (2) We also know $q = 2^k - 1$ for some $k$, so we can write $h = f \cdot g + q \cdot m$ where $m$ is an integer. (3) Since $g$ and $p$ are known, we can compute $f_p = \mathrm{invert}(f, R) \bmod p$. ...''
+
+Neither output yields a correct flag for the challenge. The contrast illustrates two distinct priors induced by the respective training corpora rather than an absolute quality ordering.
+
+%--------------------------------------------------
+\section{Discussion}
+%--------------------------------------------------
+
+\subsection{Style Transfer vs.\ Capability Transfer}
+
+Our headline finding is that continued pretraining on raw CTF writeups acts as a style-transfer operation at the 7B scale we tested. The model acquires recognisable writeup formatting and CTF-specific terminology. It does not acquire measurable capability beyond the base model on either knowledge MCQ or on single-shot CTF problem solving; on the latter task its acquired stylistic prior is actively detrimental.
+
+We suggest two contributing factors. First, 18{,}013 writeup chunks (10.6\,M tokens) is small relative to the Qwen 2.5 Coder pretraining corpus and is unlikely to push the model's reasoning ability beyond the base. Second, writeups are after-the-fact narratives whose surface form is highly distinctive but whose internal logic is heterogeneous (different problems, different tools); the most learnable signal is the surface form rather than the reasoning structure. A model trained to maximise next-token probability on such a corpus rationally allocates capacity to the most predictable surface patterns.
+
+\subsection{Domain-Prior Mismatch with Foundation-Sec-8B}
+
+The 11$\times$ gap in hedging-language frequency between our model and Foundation-Sec-8B is large enough to be qualitatively visible in side-by-side outputs. We emphasise that this is a difference in domain prior, not in capability or correctness: SOC analysts and threat-intelligence consumers benefit from hedged language because premature commitment to a hypothesis is harmful; CTF participants and after-the-fact writeup readers benefit from direct, procedural language because the goal is to reach a definite flag.
+
+\subsection{Practical Recommendations}
+
+For practitioners considering small-scale continued pretraining on a stylistically distinctive corpus, our results suggest:
+
+\begin{itemize}
+\item If the goal is style transfer (e.g., writing assistant matching a corpus's voice), continued pretraining on $\sim$10\,M tokens of raw text is sufficient.
+\item If the goal is capability transfer for direct-answer tasks, raw continued pretraining on after-the-fact narrative text is likely to underperform instruction-tuning on curated $\langle\text{prompt}, \text{answer}\rangle$ pairs, even from the same source corpus.
+\item Style overfitting can manifest as output-budget exhaustion. Increasing the response token budget mitigates this only partially; the underlying issue is that the model's prior favours narrative structure over direct answer extraction.
+\end{itemize}
+
+\subsection{Limitations}
+
+Our evaluation has the following limitations:
+
+\begin{enumerate}
+\item The NYU CTF subset is evaluated single-shot, not with the official agentic protocol. Absolute numbers cannot be compared to published NYU CTF Bench results.
+\item The three models are compared as published, with different quantisation levels (Q4{\_}K{\_}M vs Q8{\_}0). Inference-time and memory figures should be read as configuration comparisons, not architectural ones.
+\item No hyperparameter sweep was performed for the QLoRA configuration. Different LoRA ranks, learning rates, or epoch counts may produce different outcomes.
+\item Foundation-Sec-8B is not designed for CTF tasks, and the CTF subset is a context in which its strengths (calibrated hedging, threat-analysis prose) are not rewarded. Our use of it here is as a publicly available reference of a domain-specialised 8B cybersecurity LLM, not as an evaluation of its intended use cases.
+\item All training and evaluation data are in English. We do not characterise behaviour on Japanese-language CTF text, despite the base model's multilingual coverage.
+\end{enumerate}
+
+%--------------------------------------------------
+\section{Conclusion}
+%--------------------------------------------------
+
+We have produced and released \textbf{masafee-ctf-7b}, a 7B-parameter QLoRA continued-pretraining fine-tune of Qwen 2.5 Coder 7B Instruct on CTF writeup text, trained in 12 hours 17 minutes on a single consumer GPU at an electricity cost of approximately 150\,JPY. Empirically, the fine-tune produces measurable style transfer (CTF writeup formatting, terminology, directness) but no measurable capability transfer on either knowledge MCQ benchmarks or on single-shot CTF challenge solving; in fact the acquired style prior is actively detrimental on the latter task. We have also reported that the resulting model emits approximately 11$\times$ less hedging-language than Cisco's Foundation-Sec-8B-Instruct on identical CTF prompts, reflecting their respective training-data domains rather than a quality ranking.
+
+All code, scripts, the LoRA adapter, the Q4{\_}K{\_}M GGUF, and evaluation results are released. We hope this concrete account of style-vs-capability transfer at small consumer-GPU scale is useful to other practitioners weighing continued pretraining for domain adaptation.
+
+%--------------------------------------------------
+\section*{Acknowledgements}
+%--------------------------------------------------
+
+We thank the maintainers of \texttt{unsloth}, \texttt{transformers}, \texttt{peft}, \texttt{llama.cpp}, and Ollama for the open-source tooling on which this work depends; the authors of CyberMetric and the NYU CTF Bench for releasing reproducible benchmarks; the contributors of the CTFtime writeups that constitute the training corpus; and Cisco's fdtn-ai team for releasing Foundation-Sec-8B as a public reference.
+
+%--------------------------------------------------
+\section*{Resources}
+%--------------------------------------------------
+
+\begin{description}[leftmargin=0pt,labelindent=0pt]
+\item[Code] \url{https://github.com/masafykun/masafee-ctf-7b}
+\item[Model] \url{https://huggingface.co/masafy/masafee-ctf-7b}
+\item[Archive (DOI)] \href{https://doi.org/10.5281/zenodo.20413081}{10.5281/zenodo.20413081}
+\end{description}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{gururangan2020dont}
+S.~Gururangan, A.~Marasovi\'c, S.~Swayamdipta, K.~Lo, I.~Beltagy, D.~Downey, N.~Smith.
+\newblock Don't stop pretraining: Adapt language models to domains and tasks.
+\newblock In \emph{ACL}, 2020.
+
+\bibitem{dettmers2023qlora}
+T.~Dettmers, A.~Pagnoni, A.~Holtzman, L.~Zettlemoyer.
+\newblock QLoRA: Efficient finetuning of quantized LLMs.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem{hu2022lora}
+E.~Hu, Y.~Shen, P.~Wallis, Z.~Allen-Zhu, Y.~Li, S.~Wang, L.~Wang, W.~Chen.
+\newblock LoRA: Low-rank adaptation of large language models.
+\newblock In \emph{ICLR}, 2022.
+
+\bibitem{hui2024qwen25coder}
+B.~Hui, J.~Yang, et al.
+\newblock Qwen2.5-Coder technical report.
+\newblock \emph{arXiv:2409.12186}, 2024.
+
+\bibitem{tihanyi2024cybermetric}
+N.~Tihanyi, T.~Bisztray, M.~A.~Ferrag, R.~Jain, L.~C.~Cordeiro.
+\newblock CyberMetric: A benchmark dataset based on retrieval-augmented generation for evaluating LLMs in cybersecurity knowledge.
+\newblock In \emph{IEEE CSR}, 2024. \emph{arXiv:2402.07688}.
+
+\bibitem{shao2024nyuctf}
+M.~Shao, S.~Jancheska, M.~Udeshi, B.~Dolan-Gavitt, H.~Xi, K.~Milner, B.~Tan, K.~Shanmugam, S.~Garg, R.~Karri.
+\newblock NYU CTF Bench: A scalable open-source benchmark dataset for evaluating LLMs in offensive security.
+\newblock In \emph{NeurIPS Datasets and Benchmarks}, 2024. \emph{arXiv:2406.05590}.
+
+\bibitem{cisco2025foundationsec}
+fdtn-ai team.
+\newblock Foundation-Sec-8B: A cybersecurity foundation model.
+\newblock Cisco Foundation AI, 2025. \emph{arXiv:2508.01059}.
+
+\bibitem{justinwangx2024ctftime}
+J.~Wang.
+\newblock CTFtime: A collection of CTF writeups scraped from CTFtime.org.
+\newblock \url{https://huggingface.co/datasets/justinwangx/CTFtime}, 2024.
+
+\bibitem{unsloth2024}
+D.~Han, et al.
+\newblock Unsloth: 2x faster open-source fine-tuning.
+\newblock \url{https://github.com/unslothai/unsloth}, 2024.
+
+\end{thebibliography}
+
+\end{document}

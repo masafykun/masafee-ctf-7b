@@ -1,0 +1,374 @@
+\documentclass[10pt,twocolumn,a4paper]{ltjsarticle}
+
+\usepackage[a4paper,margin=2cm]{geometry}
+\usepackage{luatexja-fontspec}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{titling}
+\usepackage{authblk}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage[symbol]{footmisc}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black
+}
+
+\setlength{\columnsep}{0.6cm}
+\setlist{nosep,leftmargin=*}
+
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  breaklines=true,
+  frame=none,
+  showstringspaces=false,
+  columns=fullflexible,
+}
+
+\title{\vspace{-1.5em}Masafee CTF 7B:\\
+CTF writeup による 7B コードモデルの QLoRA 継続事前学習 ---\\
+文体適応と知識適応の実証研究}
+
+\author{Masato Suzuki\thanks{ORCID: \href{https://orcid.org/0009-0000-7977-2756}{0009-0000-7977-2756} \quad Web: \url{https://masafy.org/}}}
+\affil{Independent Researcher}
+\date{2026 年 5 月}
+
+\renewcommand{\thefootnote}{\fnsymbol{footnote}}
+
+\begin{document}
+
+\twocolumn[
+\begin{@twocolumnfalse}
+\maketitle
+
+\begin{abstract}
+\noindent 本論文は，CTFtime.org からスクレイプされた 18{,}013 件の Capture-the-Flag (CTF) writeup チャンクで，7B パラメータのコードモデル (Qwen 2.5 Coder 7B Instruct) を QLoRA 継続事前学習した結果を報告する．学習は単一の消費者向け GPU (NVIDIA GeForce RTX 3060 12\,GB) 上で 12 時間 17 分で完了し，電気代は約 150 円，クラウド計算コストは 0 円であった．得られたモデル \textbf{masafee-ctf-7b} を，ベースモデルおよび Cisco の Foundation-Sec-8B-Instruct と共に，2 種のベンチマーク (CyberMetric-500: サイバーセキュリティ知識多肢選択；NYU CTF Bench の 30 問サブセット: single-shot 非エージェント方式) で評価した．CyberMetric-500 では 3 モデルとも統計的ノイズの範囲内で同等の性能 (84.0\%, 86.2\%, 82.6\%) を示した．CTF サブセットでは 3 モデルとも低い正答率 (0\%, 13.3\%, 6.7\%) となり，writeup 学習モデルは writeup 形式の出力にコミットしてトークン上限内に最終 flag に到達しないという失敗モードが顕在化した．スタイル分析では，masafee-ctf-7b は Foundation-Sec-8B に対して hedging 表現を約 11 倍少なく産出することが判明した．これは学習データ領域 (CTF writeup vs SOC analysis テキスト) を反映したものであり，品質差ではない (hedging は SOC コンテキストでは機能的に適切である)．生 writeup での継続事前学習は capability transfer ではなく style transfer として機能し，本モデル規模では style overfitting がタスク関連出力を能動的に妨げ得る，と結論する．
+\vspace{0.5em}\\
+\noindent\textbf{キーワード:} QLoRA, 継続事前学習, Capture-the-Flag, Qwen, 消費者向け GPU, スタイル転移．
+\vspace{1em}
+\end{abstract}
+\end{@twocolumnfalse}
+]
+
+%--------------------------------------------------
+\section{はじめに}
+%--------------------------------------------------
+
+継続事前学習 (continued pretraining) --- 事前学習済み言語モデルを最適化目的を変えずにドメイン固有コーパスでさらに学習させる手法 --- は，大規模言語モデルを狭い領域に特化させるために広く用いられている \cite{gururangan2020dont}．ドメインコーパスが表面的なスタイルパターン (整形・専門用語) と深いタスク関連知識 (問題構造・推論パターン) の両方を含む場合，継続事前学習が両者を転移してくれることが期待される．
+
+本論文は，この期待を小規模で検証する実証実験を報告する．我々は 7B コードモデル (Qwen 2.5 Coder 7B Instruct \cite{hui2024qwen25coder}) に対し，18{,}013 件の CTF writeup チャンクで QLoRA \cite{dettmers2023qlora} 継続事前学習を行った．CTF writeup は特に明確なケースである: 認識しやすい表面スタイルパターン (番号付きの解法手順，\texttt{pwntools}, \texttt{checksec}, \texttt{gdb} 等の特定ツール参照，NX, PIE, RELRO, ASLR 等の典型的 CTF 防護機構の専門用語) を持ち，同時にタスク関連の内容 (exploit 推論，暗号解析アプローチ) も符号化している．
+
+本研究で観察された事項は以下の通り:
+
+\begin{itemize}
+\item \textbf{Style transfer は発生する}: 学習済みモデルは CTF writeup の形式・用語・直接的な表現を獲得する．
+\item \textbf{Capability transfer は本規模では発生しない}: 知識多肢選択テストおよび実 CTF 問題上で，学習モデルはベースモデルと統計的に区別不能か，あるいは弱い．
+\item \textbf{Style overfitting はタスク性能を能動的に低下させ得る}: 学習モデルは writeup 形式のナラティブ出力にコミットし，応答トークン上限を最終回答が出る前に消費する．
+\item \textbf{SOC 特化リファレンスとのスタイル乖離は大きく定量的に測定可能}: Cisco の Foundation-Sec-8B-Instruct \cite{cisco2025foundationsec} と比較して，本モデルは hedging 表現を約 11 倍少なく使用する．これは学習データ領域 (CTF writeup vs SOC analysis テキスト) を反映したものであり品質差ではない．hedging 表現は SOC コンテキストでは機能的に適切である．
+\end{itemize}
+
+本研究の貢献は: (i) 単一 12\,GB 消費者向け GPU 上で CTF テキストに対し 7B モデルを QLoRA 継続事前学習する完全に再現可能なレシピ；(ii) 得られたモデルと強力なベースモデル，および公開された SOC 特化リファレンスとの一対一評価；(iii) 小規模継続事前学習が産む style-vs-capability tradeoff の定量的特性化；(iv) 全学習スクリプト・評価ハーネス・LoRA アダプタ・Q4{\_}K{\_}M GGUF 配布物のオープンリリース．
+
+%--------------------------------------------------
+\section{背景と関連研究}
+%--------------------------------------------------
+
+\subsection{継続事前学習とドメイン適応}
+
+ドメイン適応事前学習 \cite{gururangan2020dont} は，下流タスク前にベース言語モデルをドメイン内テキストで拡張学習する手法である．先行研究は，この手法がドメインタスク性能を改善し得ることを示しているが，効果はドメイン内データ量・ドメインテキストと下流タスク形式の整合性・ベースモデルの既存ドメイン露出度に依存する．スタイル的に特徴的なコーパスでの小規模継続事前学習は，capability gain が最小でも視認可能な style transfer (出力がコーパスの表面形式を取る) を誘発することが知られている．
+
+\subsection{QLoRA}
+
+QLoRA \cite{dettmers2023qlora} はベースモデルの 4-bit 量子化と，attention および MLP 投影行列上の LoRA \cite{hu2022lora} アダプタを組合せる．ベースモデルは学習全体を通じ 4-bit 形式で保持され，より高精度の LoRA アダプタパラメータのみが勾配を受け取る．これにより VRAM 消費を十分に削減でき，7B モデルが単一 12\,GB GPU で微調整可能となる．我々は \texttt{unsloth} \cite{unsloth2024} 実装を用いる．これは追加のメモリ・スループット最適化を提供する．
+
+\subsection{サイバーセキュリティ LLM ベンチマーク}
+
+評価には 2 種のベンチマークを用いる．\textbf{CyberMetric} \cite{tihanyi2024cybermetric} は 10{,}000 問の多肢選択ベンチマークで，NIST 文書・RFC・公開セキュリティテキストにまたがるサイバーセキュリティ知識をカバーする．\textbf{NYU CTF Bench} \cite{shao2024nyuctf} は 200 問の test set CTF チャレンジをメタデータ・配布ファイル・参照 flag と共に提供し，公式プロトコルはエージェント方式 (sandbox 内のマルチターン対話) である．公開ベースラインによれば，最強の 32B オープン重みモデルが エージェントプロトコル下で約 31.9\% の Pass@1 を達成する；より小さなモデルは大幅に低い性能となる．
+
+\subsection{Foundation-Sec-8B-Instruct}
+
+Cisco の Foundation-Sec-8B \cite{cisco2025foundationsec} は Llama 3.1 8B から派生した 8B パラメータ言語モデルで，キュレートされたサイバーセキュリティテキスト (CVE レコード，脅威インテリレポート，exploit writeup，コンプライアンスガイド) で継続事前学習され，セキュリティアナリストのワークフローに対し instruction-tuning されている．Security Operations Centre (SOC) ワークフロー --- 脅威インテリ要約，脆弱性分類，インシデントトリアージ --- を対象としており，攻撃的セキュリティ競技を対象とはしていない．本研究では「強力で商用開発された 8B サイバーセキュリティ LLM」のリファレンスとして用いるが，設計目的が我々のものとは異なる点に留意する．
+
+%--------------------------------------------------
+\section{手法}
+%--------------------------------------------------
+
+\subsection{ベースモデル}
+
+ベースには Qwen 2.5 Coder 7B Instruct \cite{hui2024qwen25coder} を 4-bit 事前量子化版 (\texttt{unsloth/Qwen2.5-Coder-7B-Instruct}) で使用する．Qwen 2.5 (汎用版) より Qwen 2.5 Coder を選んだのは，CTF タスクがコード密度の高いタスク (バイナリ解析，exploit コード，暗号，web ペイロード) であるという事前知識による．また Qwen 3 7B より Qwen 2.5 Coder を選んだのは，本研究時点で Qwen 3 の Coder 変種が公開されていなかったためである．
+
+\subsection{学習データ}
+
+\texttt{justinwangx/CTFtime} \cite{justinwangx2024ctftime} を使用する．これは CTFtime.org からスクレイプされた 18{,}013 件の CTF writeup チャンクの公開 Hugging Face データセットである．データセットは生 writeup テキストを保持する単一フィールド \texttt{text\_chunk} を持つ．以下の前処理を適用する:
+
+\begin{enumerate}
+\item 長さフィルタ: $500 < |\text{文字数}| < 8000$ で URL のみのスタブと過度に長い連結 writeup を除外．18{,}013 件中 11{,}612 件 (64.5\%) が残る．
+\item Qwen 2.5 Coder トークナイザによるトークン化．合計トークン数: 10{,}639{,}182．
+\item EOS セパレータでドキュメント連結後，固定 2048 トークン系列にチャンク化．最後の部分チャンクは破棄し，5{,}200 packed sequence (train 4{,}940 / validation 260, 95/5 分割，seed 42) を得る．
+\end{enumerate}
+
+我々は意図的にデータを instruction format (User/Assistant) ペアに変換\emph{しない}．我々の目的は instruction tuning ではなく \emph{生} 継続事前学習の効果を特性化することである．
+
+\subsection{学習設定}
+
+QLoRA 設定:
+
+\begin{itemize}
+\item LoRA rank $r = 32$, $\alpha = 64$, dropout 0.05．
+\item 対象モジュール: $q, k, v, o$ attention 投影；$gate, up, down$ MLP 投影．
+\item ベースは 4-bit ロード (bitsandbytes の NF4)；gradient checkpointing 有効．
+\end{itemize}
+
+最適化:
+\begin{itemize}
+\item Optimizer: paged AdamW 8-bit．
+\item 学習率: $2\times 10^{-4}$, cosine schedule, warmup 10 step．
+\item Effective batch size: 8 (per-device batch 1, gradient accumulation 8)．
+\item 系列長: 2048 (RTX 3060 12\,GB 上で長系列 4096 が VRAM 制約に当たったため記録)．
+\item Epochs: 2 (1{,}236 optimization step)．
+\item Random seed: 42．
+\end{itemize}
+
+\subsection{配布}
+
+学習後，2 つの配布物を作成する: (i) LoRA アダプタ (\texttt{peft} で使用)；(ii) Q4{\_}K{\_}M GGUF (CPU 上でアダプタを FP16 ベースモデルにマージし，\texttt{llama.cpp} の \texttt{convert\_hf\_to\_gguf.py} で変換後 \texttt{llama-quantize} で量子化)．生成 GGUF は 4.4\,GB で，Ollama および \texttt{llama.cpp} 利用者向けである．
+
+%--------------------------------------------------
+\section{評価設定}
+%--------------------------------------------------
+
+3 モデルを比較する．いずれも Ollama \texttt{/api/chat} 経由で配信:
+
+\begin{itemize}
+\item \texttt{qwen2.5-coder:7b} --- ベース，Q4{\_}K{\_}M，4.7\,GB．
+\item \texttt{masafee-ctf-7b} --- 本モデル，Q4{\_}K{\_}M，4.4\,GB．
+\item \texttt{foundation-sec-8b} --- Cisco 製，Q8{\_}0，8.5\,GB．
+\end{itemize}
+
+量子化レベルは異なる (Q4{\_}K{\_}M vs Q8{\_}0)．推論時間とメモリの値は公開状態のままを報告し，アーキテクチャの like-for-like 比較ではない．
+
+\subsection{CyberMetric-500}
+
+CyberMetric \cite{tihanyi2024cybermetric} の 500 問サブセットを使用する．各項目は質問・選択肢 A--D・正解文字から成る．プロンプト形式は
+
+\begin{lstlisting}
+{question}
+
+A. {option A}
+B. {option B}
+C. {option C}
+D. {option D}
+
+Respond with only a single letter (A, B, C, or D).
+\end{lstlisting}
+
+生成パラメータ: temperature 0, \texttt{num\_predict} 30．応答中で最初に出現する単独 A/B/C/D 文字をパースする．
+
+\subsection{NYU CTF Bench single-shot サブセット}
+
+NYU CTF Database \cite{shao2024nyuctf} の 200 問 test split から 30 問を選定 (crypto 6, rev 6, pwn 6, misc 4, web 4, forensics 4 のカテゴリ層化サンプリング，seed 42)．各チャレンジに対し以下を含むプロンプトを構成: チャレンジメタデータ (name, category, description)，README，配布ファイル (テキストは全文，バイナリは長さおよび先頭 2{,}500 バイトの hexdump で要約)．参照 \texttt{solver.py} は除外．モデルには analysis を生成した後 \texttt{FLAG: <値>} で終わるよう指示する．
+
+生成パラメータ: temperature 0, \texttt{num\_ctx} 8192, \texttt{num\_predict} 800．参照 flag 文字列 (または内側 \texttt{\{...\}} 部分) が応答中のどこかに出現すれば (大文字小文字無視，空白除去) 正解とする．
+
+本プロトコルは NYU CTF Bench の公式エージェントプロトコルより厳密に弱い．絶対値は公開された NYU CTF Bench 数値と比較しない；本サブセットは 3 モデルを同条件で互いに比較するためにのみ用いる．
+
+\subsection{スタイル分析}
+
+30 問プロンプトセット上で追加に以下を測定する: (a) 文字数による平均出力長；(b) 固定リスト (\texttt{pwntools}, \texttt{checksec}, ROP, ret2win, ret2libc, \texttt{pattern\_create}, \texttt{gdb}, \texttt{Ghidra}, \texttt{IDA}, NX, PIE, RELRO, ASLR, canary, shellcode, buffer overflow など) からの異なる CTF ツール/技法用語数；(c) 固定リスト ``might be'', ``possibly'', ``could be'', ``perhaps'', ``may have'', ``appears to'', ``seems to'', ``unable to determine'' からの hedging 表現の合計出現数．
+
+%--------------------------------------------------
+\section{結果}
+%--------------------------------------------------
+
+\subsection{CyberMetric-500}
+
+\begin{table}[h!]
+\centering
+\caption{CyberMetric-500 正答率．}
+\label{tab:cybermetric}
+\small
+\begin{tabular}{lrrr}
+\toprule
+モデル & 正解 & 全体 & 正答率 \\
+\midrule
+\texttt{qwen2.5-coder:7b} & 431 & 500 & 86.20\% \\
+\texttt{masafee-ctf-7b} & 420 & 500 & 84.00\% \\
+\texttt{foundation-sec-8b} & 413 & 500 & 82.60\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+3 モデルとも同じ 95\% 信頼区間内に位置する．$n=500$ における比率約 0.85 の二項比例の 95\% CI は $\pm 3.1$ ポイント．いずれの対比較も $\alpha = 0.05$ で統計的有意性に達しない．CTF writeup 継続事前学習は知識 MCQ の測定可能な改善も劣化も生まない．
+
+\subsection{NYU CTF Bench single-shot サブセット}
+
+\begin{table}[h!]
+\centering
+\caption{NYU CTF サブセット，single-shot Pass@1．}
+\label{tab:nyu}
+\small
+\begin{tabular}{lrrr}
+\toprule
+モデル & 正解 & 全体 & Pass@1 \\
+\midrule
+\texttt{qwen2.5-coder:7b} & 4 & 30 & 13.3\% \\
+\texttt{foundation-sec-8b} & 2 & 30 & 6.7\% \\
+\texttt{masafee-ctf-7b} & 0 & 30 & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+3 モデルとも性能は低い．ベースの 13.3\% は (i) 公開 CSAW writeup と事前学習データの重複，(ii) チャレンジメタデータからの推論成功，(iii) 選定サブセットの解きやすさの混合反映であり，このモデル規模での機能的 CTF 攻略能力を示すものではない．
+
+masafee-ctf-7b の 0\% は示唆的である: 目視確認では writeup 形式の散文 (``\texttt{\# CSAW 2017 - grumpcheck (rev) \#\# Description ...}'') を生成し，具体的 flag 出力前に 800 トークン予算を使い切る．1 問 (\texttt{2017q-pwn-pilot}, 実際はクアッドコプター題) では，まったく別のメニュー注文プログラムについて整合的な writeup を生成し，writeup 形式プライアがプロンプト固有のコンテンツを上書きすることを示唆している．
+
+\subsection{スタイル行動}
+
+\begin{table}[h!]
+\centering
+\caption{30 問プロンプトセット上のスタイル指標．}
+\label{tab:style}
+\small
+\begin{tabular}{lrr}
+\toprule
+指標 & masafee & foundation-sec \\
+\midrule
+平均出力長 (文字) & 1{,}860 & 1{,}903 \\
+使用された異なり CTF 用語数 & 22 & 21 \\
+Hedging 表現 (30 件合計) & 7 & 77 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+約 11 倍の hedging 表現比は，観察された最大の行動差である．これを品質差と解釈するのは適切でない: hedging 表現 (``might be'', ``appears to'', ``seems to'', ``unable to determine'' 等) は SOC および脅威インテリのコンテキストでは機能的に適切であり，特定の攻撃仮説への早期コミットがアナリストを誤導しうるからである．Foundation-Sec-8B の高 hedging 頻度はその設計目標と整合する．対して CTF writeup は事後ナラティブで「何が効いたか」を述べるものであり，このプライアが masafee-ctf-7b の出力に，より直接的・コマンド指向の表現として表れる．
+
+\subsection{例: 暗号チャレンジ \texttt{2022q-cry-beyond\_quantum}}
+
+\paragraph{Foundation-Sec-8B (抜粋, 当該区間で hedge 4 回):}
+「本チャレンジは NTRU 暗号系がベースに見える... 実装には複数の潜在的な脆弱性や見落としが考えられる: (1) 鍵生成: 鍵生成プロセスは十分にセキュアでないかもしれない；(2) エラーハンドリング: エラーハンドリング問題の可能性がある...」
+
+\paragraph{masafee-ctf-7b (抜粋, 当該区間で hedge 0 回):}
+「脆弱性は，多項式 $f$ が $h$，$g$，$p$ から回復可能なこと． (1) $h = f \cdot g \bmod q$ であることが分かっている．(2) $q = 2^k - 1$ (ある $k$ で) であることも分かっており，$h = f \cdot g + q \cdot m$ ($m$ は整数) と書ける．(3) $g$ と $p$ は既知なので，$f_p = \mathrm{invert}(f, R) \bmod p$ を計算できる．...」
+
+どちらの出力もチャレンジの正解 flag を導いていない．対比は，両者の学習コーパスが誘発する 2 つの異なるプライアを示すものであり，絶対的な品質順序ではない．
+
+%--------------------------------------------------
+\section{考察}
+%--------------------------------------------------
+
+\subsection{Style transfer vs Capability transfer}
+
+最大の知見は，生 CTF writeup 上の継続事前学習が，我々が試した 7B 規模では style transfer 操作として作用するということである．モデルは認識可能な writeup 形式と CTF 固有用語を獲得する．知識 MCQ 上でも single-shot CTF 問題上でもベースを超える測定可能な capability を獲得しない；後者のタスクでは獲得したスタイルプライアが能動的に有害である．
+
+寄与要因として 2 つを提案する．第一に，18{,}013 件 writeup チャンク (10.6\,M トークン) は Qwen 2.5 Coder の事前学習コーパスに比べ小さく，ベースの推論能力を超える押し上げは起きにくい．第二に，writeup は事後ナラティブで，表面形式が極めて特徴的だが内部論理は不均一 (問題ごと・ツールごとに異なる)；次トークン確率を最大化するよう学習されるモデルは，最も予測しやすい表面パターンに容量を合理的に割り当てる．
+
+\subsection{Foundation-Sec-8B とのドメインプライア不一致}
+
+本モデルと Foundation-Sec-8B の hedging 表現頻度の 11 倍差は，並列出力で定性的に視認できる程度に大きい．これは capability や正確性の差ではなくドメインプライアの差であることを強調する: SOC アナリストおよび脅威インテリ消費者は，仮説への早期コミットが有害なため hedged 言語を歓迎する；CTF 参加者および事後 writeup 読者は，目的が明確な flag に到達することなため直接的・手順的言語を歓迎する．
+
+\subsection{実務的推奨}
+
+スタイル的に特徴的なコーパスで小規模継続事前学習を検討する実務者に対し，我々の結果は次を示唆する:
+
+\begin{itemize}
+\item Style transfer (例: コーパスの声に合わせた書き手アシスタント) が目的なら，生テキスト約 1{,}000 万トークンの継続事前学習で十分．
+\item 直接回答タスクの capability transfer が目的なら，事後ナラティブテキスト上の生継続事前学習は，同コーパス由来のキュレートされた $\langle\text{プロンプト}, \text{回答}\rangle$ ペア上の instruction tuning に劣る可能性が高い．
+\item Style overfitting は出力予算枯渇として表面化し得る．応答トークン予算を増やしても部分的にしか緩和されない；根本問題はモデルのプライアが直接回答抽出よりナラティブ構造を好むことである．
+\end{itemize}
+
+\subsection{制限}
+
+評価には以下の制限がある:
+
+\begin{enumerate}
+\item NYU CTF サブセットは single-shot で評価しており，公式エージェントプロトコルではない．絶対値は公開 NYU CTF Bench 結果と比較できない．
+\item 3 モデルは公開状態で比較しており，量子化レベルが異なる (Q4{\_}K{\_}M vs Q8{\_}0)．推論時間およびメモリの値は構成比較として読むべきでありアーキテクチャ比較ではない．
+\item QLoRA 設定のハイパーパラメータスイープは行っていない．異なる LoRA rank・学習率・エポック数は異なる結果を生む可能性がある．
+\item Foundation-Sec-8B は CTF タスク用には設計されておらず，CTF サブセットは同モデルの強み (キャリブレーションされた hedging，脅威分析散文) が報われないコンテキストである．本研究での使用はドメイン特化 8B サイバーセキュリティ LLM の公開リファレンスとしてであり，意図された使用例の評価ではない．
+\item 全学習・評価データは英語である．ベースモデルの多言語カバレッジにもかかわらず，日本語 CTF テキストでの行動は特性化していない．
+\end{enumerate}
+
+%--------------------------------------------------
+\section{結論}
+%--------------------------------------------------
+
+我々は \textbf{masafee-ctf-7b} を作成し公開した．これは Qwen 2.5 Coder 7B Instruct を CTF writeup テキストで QLoRA 継続事前学習した 7B パラメータ微調整モデルで，単一消費者向け GPU 上で 12 時間 17 分・電気代約 150 円で学習された．実証的に，微調整は測定可能な style transfer (CTF writeup 形式・用語・直接性) を生むが，知識 MCQ ベンチマーク上でも single-shot CTF チャレンジ攻略上でも測定可能な capability transfer を生まない；実際後者のタスクでは獲得したスタイルプライアが能動的に有害である．得られたモデルが Cisco の Foundation-Sec-8B-Instruct と同一 CTF プロンプトで約 11 倍少ない hedging 表現を産出することも報告した．これは品質順序ではなく学習データ領域を反映している．
+
+全コード・スクリプト・LoRA アダプタ・Q4{\_}K{\_}M GGUF・評価結果は公開済みである．小規模消費者向け GPU での style-vs-capability transfer の具体的記述が，ドメイン適応のため継続事前学習を検討する他の実務者にとって有用であることを期待する．
+
+%--------------------------------------------------
+\section*{謝辞}
+%--------------------------------------------------
+
+本研究が依存するオープンソースツール (\texttt{unsloth}, \texttt{transformers}, \texttt{peft}, \texttt{llama.cpp}, Ollama) のメンテナ；再現可能なベンチマークを公開した CyberMetric および NYU CTF Bench の著者；学習コーパスを構成する CTFtime writeup の寄稿者；公開リファレンスとして Foundation-Sec-8B をリリースした Cisco fdtn-ai チームに感謝する．
+
+%--------------------------------------------------
+\section*{Resources}
+%--------------------------------------------------
+
+\begin{description}[leftmargin=0pt,labelindent=0pt]
+\item[Code] \url{https://github.com/masafykun/masafee-ctf-7b}
+\item[Model] \url{https://huggingface.co/masafy/masafee-ctf-7b}
+\item[Archive (DOI)] \href{https://doi.org/10.5281/zenodo.20413081}{10.5281/zenodo.20413081}
+\end{description}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{gururangan2020dont}
+S.~Gururangan, A.~Marasovi\'c, S.~Swayamdipta, K.~Lo, I.~Beltagy, D.~Downey, N.~Smith.
+\newblock Don't stop pretraining: Adapt language models to domains and tasks.
+\newblock In \emph{ACL}, 2020.
+
+\bibitem{dettmers2023qlora}
+T.~Dettmers, A.~Pagnoni, A.~Holtzman, L.~Zettlemoyer.
+\newblock QLoRA: Efficient finetuning of quantized LLMs.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem{hu2022lora}
+E.~Hu, Y.~Shen, P.~Wallis, Z.~Allen-Zhu, Y.~Li, S.~Wang, L.~Wang, W.~Chen.
+\newblock LoRA: Low-rank adaptation of large language models.
+\newblock In \emph{ICLR}, 2022.
+
+\bibitem{hui2024qwen25coder}
+B.~Hui, J.~Yang, et al.
+\newblock Qwen2.5-Coder technical report.
+\newblock \emph{arXiv:2409.12186}, 2024.
+
+\bibitem{tihanyi2024cybermetric}
+N.~Tihanyi, T.~Bisztray, M.~A.~Ferrag, R.~Jain, L.~C.~Cordeiro.
+\newblock CyberMetric: A benchmark dataset based on retrieval-augmented generation for evaluating LLMs in cybersecurity knowledge.
+\newblock In \emph{IEEE CSR}, 2024. \emph{arXiv:2402.07688}.
+
+\bibitem{shao2024nyuctf}
+M.~Shao, S.~Jancheska, M.~Udeshi, B.~Dolan-Gavitt, H.~Xi, K.~Milner, B.~Tan, K.~Shanmugam, S.~Garg, R.~Karri.
+\newblock NYU CTF Bench: A scalable open-source benchmark dataset for evaluating LLMs in offensive security.
+\newblock In \emph{NeurIPS Datasets and Benchmarks}, 2024. \emph{arXiv:2406.05590}.
+
+\bibitem{cisco2025foundationsec}
+fdtn-ai team.
+\newblock Foundation-Sec-8B: A cybersecurity foundation model.
+\newblock Cisco Foundation AI, 2025. \emph{arXiv:2508.01059}.
+
+\bibitem{justinwangx2024ctftime}
+J.~Wang.
+\newblock CTFtime: A collection of CTF writeups scraped from CTFtime.org.
+\newblock \url{https://huggingface.co/datasets/justinwangx/CTFtime}, 2024.
+
+\bibitem{unsloth2024}
+D.~Han, et al.
+\newblock Unsloth: 2x faster open-source fine-tuning.
+\newblock \url{https://github.com/unslothai/unsloth}, 2024.
+
+\end{thebibliography}
+
+\end{document}
