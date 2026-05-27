@@ -1,5 +1,7 @@
 # Evaluation Report: masafee-ctf-7b
 
+> *日本語版*: [EVALUATION_ja.md](EVALUATION_ja.md)
+
 This document reports the empirical evaluation of **masafee-ctf-7b**, a 7B-parameter
 language model fine-tuned via QLoRA on CTF (Capture-the-Flag) writeup text, against
 two reference models on two cybersecurity benchmarks. The intent is to characterize
