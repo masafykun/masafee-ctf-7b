@@ -19,15 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-NOTE ON MODEL WEIGHTS:
-
-The MIT license above covers the code, scripts, and documentation in this
-repository. The trained model weights (LoRA adapter and GGUF files distributed
-separately on Hugging Face at https://huggingface.co/masafy/masafee-ctf-7b)
-are released for RESEARCH AND PERSONAL USE ONLY. They are a derivative work
-of CTFtime writeups whose copyright belongs to individual contributors;
-redistribution or commercial use of the weights is not permitted without
-explicit permission from those original authors.
