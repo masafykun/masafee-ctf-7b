@@ -1,0 +1,13 @@
+NOTICE — Scope of License
+
+The MIT License (see LICENSE) covers the code, scripts, and documentation in
+this repository.
+
+NOTE ON MODEL WEIGHTS:
+
+The trained model weights (LoRA adapter and GGUF files distributed separately
+on Hugging Face at https://huggingface.co/masafy/masafee-ctf-7b) are released
+for RESEARCH AND PERSONAL USE ONLY. They are a derivative work of CTFtime
+writeups whose copyright belongs to individual contributors; redistribution or
+commercial use of the weights is not permitted without explicit permission
+from those original authors.
